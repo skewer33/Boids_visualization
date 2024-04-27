@@ -25,7 +25,7 @@ class Birds(pygame.sprite.Sprite):
         self.move_angle = random.uniform(-math.pi,0)
         print(f'start angle {self.move_angle}')
         # object features and it`s localization on the simulation`s field
-        self.image_orig = img # храним исходное изображение, это нужно для rotate()
+        self.image_orig = img.convert_alpha() # храним исходное изображение, это нужно для rotate()
         self.image_orig = pygame.transform.scale(self.image_orig, (size, size))
         self.image = self.image_orig
         self.rect = self.image.get_rect()
@@ -38,7 +38,7 @@ class Birds(pygame.sprite.Sprite):
         # moving trace
         self.trace_length = trace_length
         self.trace_coord = [(self.rect.centerx, self.rect.centery)] * self.trace_length
-        self.trace_color = random.choice([const.WHITE, const.BLUE, const.GREEN, const.YELLOW, const.GRAY])
+        self.trace_color = random.choice(const.palette)
 
         # Соседи
         self.neighbours_list = [] # contain the dicts of neighbours` features:
@@ -80,7 +80,7 @@ class Birds(pygame.sprite.Sprite):
         for i in range(self.trace_length-1):
             pygame.draw.line(self.screen, self.trace_color, self.trace_coord[i], self.trace_coord[i+1])
 
-    def null_trajectory(self):
+    def _null_trajectory(self):
         """
         function resets the trajectory line
         :return: None
@@ -101,22 +101,33 @@ class Birds(pygame.sprite.Sprite):
             #self.move_angle = 2*math.pi - self.move_angle
             self.move_angle = random.uniform(math.pi, 2 * math.pi)
 
-    def cycle_world(self, WIDTH, HEIGHT):
-        if self.rect.centerx > WIDTH:
-            self.rect.centerx = 0
-            self.null_trajectory()
-        if self.rect.centerx < 0:
-            self.rect.centerx = WIDTH
-            self.null_trajectory()
-        if self.rect.centery < 0:
-            self.rect.centery = HEIGHT
-            self.null_trajectory()
-        if self.rect.centery > HEIGHT:
-            self.rect.centery = 0
-            self.null_trajectory()
+    def cycle_world(self,
+                    x_min, x_max,
+                    y_min, y_max):
+        """
+        function checks bird`s position and moved it to other side of World
+        :param x_min: min X coordinate of world
+        :param x_max: max X coordinate of world
+        :param y_min: min Y coordinate of world
+        :param y_max: max Y coordinate of world
+        :return:
+        """
+        if self.rect.centerx > x_max:
+            self.rect.centerx = x_min
+            self._null_trajectory()
+        if self.rect.centerx < x_min:
+            self.rect.centerx = x_max
+            self._null_trajectory()
+        if self.rect.centery > y_max:
+            self.rect.centery = y_min
+            self._null_trajectory()
+        if self.rect.centery < y_min:
+            self.rect.centery = y_max
+            self._null_trajectory()
+
 
 # ПРАВИЛА СОЦИАЛЬНОГО ВЗАИМОДЕЙСТВИЯ
-    def dont_crush(self):
+    def _dont_crush(self):
         """
 
         :param min_dist: in which distance the bird will change it`s direction
@@ -138,7 +149,7 @@ class Birds(pygame.sprite.Sprite):
                 #    self.change_direction(- self.rule_weights[nbr_class][0] * const.turn_angle)
 
     @staticmethod
-    def circular_mean(angles):
+    def _circular_mean(angles): # we didn`t use it now
         """
         function for calculate mean angle, because common mean take wrong answers
         for example: mean(0, 2*pi) = pi
@@ -157,16 +168,35 @@ class Birds(pygame.sprite.Sprite):
             return 2 * math.pi - mean_rad
         return mean_rad
 
-    def average_neighbour_speed(self):
+    def _angle_between_2_points(self, ax, ay, bx, by):
+        if ax-bx+ay-by == 0:
+            return self.move_angle
+        dx = ax - bx
+        dy = ay - by
+        rads = math.atan2(dy, dx)
+        rads %= 2 * math.pi
+        return rads
+
+    def _average_neighbour_speed(self):
         if len(self.neighbours_list) < 1:
             return
         # calculate delta speed: d_speed = mean((speed`s neighbours - self speed)*weights)
         d_speed = sum([(n['speed']-self.speed)*self.rule_weights[n['class']][1] for n in self.neighbours_list])/len(self.neighbours_list)
-        average_angle = self.circular_mean([n['direction'] for n in self.neighbours_list if n['class'] == 0])
         self.speed += d_speed
-        self.change_direction((average_angle - self.move_angle)*self.rule_weights[0][1])
 
-    def geometric_mass_center(self):
+        # calculate delta angle:
+        # 1) find vx and vy - projections of average vector of neighbours speed
+        # 2) find delta_angle =  angle between bird direction and vector of average neighours speed
+        # 3) change current direction to delta_angle
+        vx = sum([n['speed']*math.cos(n['direction']) for n in self.neighbours_list if n['class'] == 0]) / len(self.neighbours_list)
+        vy = sum([n['speed']*math.sin(n['direction']) for n in self.neighbours_list if n['class'] == 0]) / len(self.neighbours_list)
+
+        average_angle = self._angle_between_2_points(vx, vy, 0, 0)
+        delta_angle = average_angle - self.move_angle
+        self.change_direction((delta_angle)*self.rule_weights[0][1])
+
+
+    def _geometric_mass_center(self):
         average_x = 0
         average_y = 0
         if len(self.neighbours_list) < 1:
@@ -189,14 +219,11 @@ class Birds(pygame.sprite.Sprite):
     def update(self):
 
         if const.second_rule:
-            self.average_neighbour_speed()
+            self._average_neighbour_speed()
         if const.third_rule:
-            self.geometric_mass_center()
+            self._geometric_mass_center()
         if const.first_rule:
-            self.dont_crush()
-        #if self.i % 10 == 5:
-        #    self.change_direction(2 * math.pi * random.random())
-        self.cycle_world(WIDTH, HEIGHT)
+            self._dont_crush()
 
         self.movement(self.speed, self.move_angle)
 
@@ -224,15 +251,6 @@ class Predator(Birds):
     def take_position(self, x, y):
         self.rect.centerx, self.rect.centery = x, y
 
-    def angle_between_2_points(self, ax, ay, bx, by):
-        if ax-bx+ay-by == 0:
-            return self.move_angle
-        dx = ax - bx
-        dy = ay - by
-        rads = math.atan2(dy, dx)
-        rads %= 2 * math.pi
-        return rads
-
     def is_collided_with(self, sprite):
         return self.rect.colliderect(sprite.rect)
 
@@ -240,7 +258,7 @@ class Predator(Birds):
         self.prev_pos = [self.rect.centerx, self.rect.centery]
         self.take_position(pygame.mouse.get_pos()[0], pygame.mouse.get_pos()[1])
         if pow((self.prev_pos[0] - self.rect.centerx), 2) + pow((self.prev_pos[1] - self.rect.centery), 2) > 0:
-            self.move_angle = self.angle_between_2_points(self.rect.centerx, self.rect.centery,
+            self.move_angle = self._angle_between_2_points(self.rect.centerx, self.rect.centery,
                                                           self.prev_pos[0], self.prev_pos[1])
             self.rotate()
 
